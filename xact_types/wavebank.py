@@ -1,0 +1,3 @@
+class WaveBank:
+    def __init__(self):
+        ...
