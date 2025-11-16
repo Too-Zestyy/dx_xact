@@ -11,11 +11,11 @@ WaveBankFriendlyName = Annotated[str, StringConstraints(pattern=r"^[a-zA-Z0-9-_!
 
 
 class WaveBankData(StrictBaseModel):
-    flags: int
-    entry_count: NonNegativeInt
-    bank_name: WaveBankFriendlyName
-    entry_metadata_element_size: NonNegativeInt
-    entry_name_element_size: NonNegativeInt
-    alignment: PositiveInt
-    compact_format: PositiveInt
-    build_time: PositiveInt
+    flags: int = 0
+    entry_count: NonNegativeInt = 0
+    bank_name: WaveBankFriendlyName = ''
+    entry_metadata_element_size: NonNegativeInt = 0
+    entry_name_element_size: NonNegativeInt = 0
+    alignment: NonNegativeInt = 0
+    compact_format: NonNegativeInt = 0
+    build_time: NonNegativeInt = 0

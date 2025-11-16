@@ -1,11 +1,8 @@
+from pydantic import NonNegativeInt
+
 from xact_types.utils import StrictBaseModel
 
 
 class Segment(StrictBaseModel):
-    offset: int
-    length: int
-
-
-class WaveBankHeader(StrictBaseModel):
-    version: int
-    segments: list[Segment]
+    offset: NonNegativeInt
+    length: NonNegativeInt
