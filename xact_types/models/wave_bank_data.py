@@ -6,7 +6,7 @@ from xact_types.utils import StrictBaseModel
 
 # TODO: Add more specific validation for wave bank names when documentation is found
 #  - this pattern uses symbols and variations manually found to be valid via the XACT GUI, and *is not* exhaustive
-WaveBankFriendlyName = Annotated[str, StringConstraints(pattern=r"^[a-zA-Z0-9-_!£$%&^@#()+\[\].,~'`]+$",
+WaveBankFriendlyName = Annotated[str, StringConstraints(pattern=r"^[a-zA-Z0-9-_!£$%&^@#()+\[\].,~'` ]+$",
                                                         min_length=1, max_length=63)]
 
 

@@ -226,6 +226,8 @@ class WaveBank(StrictBaseModel):
             assert len(streams) == len(sounds)
             # print(sounds[0].codec.name)
 
+        # TODO: Extract audio file names from xwb file if possible (unxwb's `xsb_names` seems like a good start)
+
         return WaveBank(
             sounds=sounds,
             streams=streams,
@@ -236,15 +238,27 @@ class WaveBank(StrictBaseModel):
             data=xwb_data,
         )
 
-                # with wave.open('test.wav', 'wb') as wav_file:
-                #
-                #     wav_file.setnchannels(format_info.channels)
-                #     wav_file.setframerate(format_info.rate)
-                #     wav_file.setsampwidth(format_info.channels)
-                #     wav_file.writeframes(audio_data)
+    def extract_raw_pcm_sounds(self, extract_dir: Path) -> list[Path | None]:
+        assert len(self.streams) == len(self.sounds)
 
+        extraction_paths: list[Path | None] = []
 
-            # TODO: Return filled WaveBank once file is read, Load sound effects (make class)
+        for count, sound in enumerate(self.sounds):
+            if sound.codec == MiniFormatTag.Pcm:
+                sound_path = extract_dir / f'{self.data.bank_name}_sound_{count}.wav'
+
+                with wave.open(str(sound_path), 'wb') as wav_file:
+
+                    wav_file.setnchannels(sound.channels)
+                    wav_file.setframerate(sound.sample_rate)
+                    wav_file.setsampwidth(sound.channels)
+                    wav_file.writeframes(sound.audio_data)
+
+                extraction_paths.append(sound_path)
+            else:
+                extraction_paths.append(None)
+
+        return extraction_paths
 
 
 def decode_audio_format(format_data: int, version: int) -> WaveFormat:
