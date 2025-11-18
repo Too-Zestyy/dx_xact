@@ -30,24 +30,27 @@ def read_int_32_from_stream(stream: BinaryIO) -> int:
 
 class WaveBank(StrictBaseModel):
     # TODO: Add parsing of sound data (likely just waves for now)
-    sounds: list
-    streams: list
+    sounds: list[SoundEffect] | tuple[SoundEffect, ...]
+    streams: tuple[StreamInfo, ...]
 
-    bank_name: WaveBankFriendlyName
-    file_name: str
+    # bank_name: WaveBankFriendlyName
+    file_name: Path
     streaming: bool
-    offset: NonNegativeInt
-    packet_size: PositiveInt
+    # offset: NonNegativeInt
+    # packet_size: PositiveInt
 
-    version: PositiveInt
+    # version: PositiveInt
     play_region_offset: NonNegativeInt
 
     header: WaveBankHeader
     data: WaveBankData
 
     # TODO: Remove fields if left unused
-    is_in_use: bool
-    is_prepared: bool
+    # is_in_use: bool
+    # is_prepared: bool
+
+    # TODO: Provide `play_region_offset` updates when bank is updated?
+    #  Remove in favour of function that reads data when called?
 
     @classmethod
     def from_xwb(cls, file_path: Path) -> 'WaveBank':
@@ -126,13 +129,13 @@ class WaveBank(StrictBaseModel):
                 entry_name = bytearray(b'\0' * (xwb_data.entry_name_element_size + 1))
                 entry_name[xwb_data.entry_name_element_size] = 0
 
-            sounds = tuple(SoundEffect() for _ in range(xwb_data.entry_count))
+            sounds: list[SoundEffect] = []
             streams = tuple(StreamInfo() for _ in range(xwb_data.entry_count))
             # Go to the first wave audio data
             xwb_file.seek(wavebank_offset)
 
-            print(wavebank_offset)
-            print(xwb_header.segments)
+            # print(wavebank_offset)
+            # print(xwb_header.segments)
 
             is_compact_format = (xwb_data.flags & WaveBankFlags.compact_format) != 0
 
@@ -187,15 +190,16 @@ class WaveBank(StrictBaseModel):
                         if info.file_length != 0:
                             info.file_length = xwb_header.segments[last_segment].length
 
-            is_streaming_bank = bool(xwb_data.flags & WaveBankTypes.streaming)
+            # In cases like a game engine, the sounds would only be loaded if necessary
+            # (i.e. when the sound is directly requested in the case of streaming banks, and immediately otherwise).
+            # Since this library focuses on manipulating the data as easily as possible,
+            # the audio data is loaded immediately regardless of if the wavebank calls for it.
+            is_streaming_bank = bool(xwb_data.flags & WaveBankTypes.streaming)  # Unused due to above
 
-            # TODO: For now, I'm hijacking this function to dump what *should* be the PCM data from the wavebank.
-            #  Once It's confirmed that I can extract it, change this to return a filled `WaveBank` as expected.
-
-            if not is_streaming_bank:
-                print('Not streaming.')
-            else:
-                print('Streaming.')
+            # if not is_streaming_bank:
+            #     print('Not streaming.')
+            # else:
+            #     print('Streaming.')
 
             for i in range(len(streams)):
                 info = streams[i]
@@ -203,33 +207,76 @@ class WaveBank(StrictBaseModel):
                 xwb_file.seek(info.file_offset + play_region_offset)
                 audio_data = xwb_file.read(info.file_length)
 
-                format_info = decode_format(info.format, xwb_header.version)
+                format_info = decode_audio_format(info.format, xwb_header.version)
 
                 assert format_info.codec == MiniFormatTag.Pcm
-                print(format_info)
 
-                with wave.open('test.wav', 'wb') as wav_file:
+                sounds.append(
+                    SoundEffect(
+                        codec=format_info.codec,
+                        audio_data=audio_data,
+                        channels=format_info.channels,
+                        sample_rate=format_info.rate,
+                        block_alignment=format_info.alignment,
+                        loop_start=info.loop_start,
+                        loop_length=info.loop_length
+                    )
+                )
 
-                    wav_file.setnchannels(format_info.channels)
-                    wav_file.setframerate(format_info.rate)
-                    wav_file.setsampwidth(format_info.channels)
-                    wav_file.writeframes(audio_data)
+            assert len(streams) == len(sounds)
+            # print(sounds[0].codec.name)
+
+        return WaveBank(
+            sounds=sounds,
+            streams=streams,
+            file_name=file_path,
+            streaming=is_streaming_bank,
+            play_region_offset=play_region_offset,
+            header=xwb_header,
+            data=xwb_data,
+        )
+
+                # with wave.open('test.wav', 'wb') as wav_file:
+                #
+                #     wav_file.setnchannels(format_info.channels)
+                #     wav_file.setframerate(format_info.rate)
+                #     wav_file.setsampwidth(format_info.channels)
+                #     wav_file.writeframes(audio_data)
 
 
             # TODO: Return filled WaveBank once file is read, Load sound effects (make class)
 
 
-def decode_format(format_data: int, version: int) -> WaveFormat:
-    if version == 1:
-        codec =    MiniFormatTag(format_data                      & ((1 << 1) - 1))
-        channels =              (format_data >> 1)                & ((1 << 3) - 1)
-        rate =                  (format_data >> (1 + 3 + 1))      & ((1 << 18) - 1)
-        alignment =             (format_data >> (1 + 3 + 1 + 18)) & ((1 << 8) - 1)
+def decode_audio_format(format_data: int, version: int) -> WaveFormat:
+    # Data descriptions from `unxwb`
 
+    # version 1:
+    # 1 00000000 000101011000100010 0 001 0
+    # | |         |                 | |   |
+    # | |         |                 | |   wFormatTag
+    # | |         |                 | nChannels
+    # | |         |                 ???
+    # | |         nSamplesPerSec
+    # | wBlockAlign
+    # wBitsPerSample
+    if version == 1:
+        codec     = MiniFormatTag(format_data                      & ((1 << 1) - 1))
+        channels  =              (format_data >>  1)               & ((1 << 3) - 1)
+        rate      =              (format_data >> (1 + 3 + 1))      & ((1 << 18) - 1)
+        alignment =              (format_data >> (1 + 3 + 1 + 18)) & ((1 << 8) - 1)
+
+    # versions 2, 3, 37, 42, 43, 44 and so on, check WAVEBANKMINIWAVEFORMAT in xact3wb.h
+    # 0 00000000 000111110100000000 010 01
+    # | |        |                  |   |
+    # | |        |                  |   wFormatTag
+    # | |        |                  nChannels
+    # | |        nSamplesPerSec
+    # | wBlockAlign
+    # wBitsPerSample
     else:
-        codec =    MiniFormatTag(format_data                      & ((1 << 2) - 1))
-        channels =              (format_data >> 2)                & ((1 << 3) - 1)
-        rate =                  (format_data >> (2 + 3))          & ((1 << 18) - 1)
-        alignment =             (format_data >> (2 + 3 + 18))     & ((1 << 8) - 1)
+        codec     = MiniFormatTag(format_data                      & ((1 << 2) - 1))
+        channels  =              (format_data >>  2)               & ((1 << 3) - 1)
+        rate      =              (format_data >> (2 + 3))          & ((1 << 18) - 1)
+        alignment =              (format_data >> (2 + 3 + 18))     & ((1 << 8) - 1)
 
     return WaveFormat(codec=codec, channels=channels, rate=rate, alignment=alignment)
