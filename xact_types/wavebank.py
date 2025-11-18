@@ -1,13 +1,18 @@
 import struct
+import wave
 from pathlib import Path
 from typing import BinaryIO
 
 from pydantic import NonNegativeInt, PositiveInt
 
-from xact_types.enums.wavebank_flags import WaveBankFlags
+from xact_types.enums.mini_format_tag import MiniFormatTag
+from xact_types.enums.wavebank_flags import WaveBankFlags, WaveBankTypes
 from xact_types.models.segments import Segment
+from xact_types.models.stream_info import StreamInfo
 from xact_types.models.wave_bank_data import WaveBankData, WaveBankFriendlyName
 from xact_types.models.wave_bank_header import WaveBankHeader
+from xact_types.models.wave_format import WaveFormat
+from xact_types.sound_effect import SoundEffect
 from xact_types.utils import StrictBaseModel
 
 
@@ -100,9 +105,9 @@ class WaveBank(StrictBaseModel):
                 xwb_data.entry_metadata_element_size = read_int_32_from_stream(xwb_file)
                 xwb_data.entry_name_element_size = read_int_32_from_stream(xwb_file)
                 xwb_data.alignment = read_int_32_from_stream(xwb_file)
-                wavebank_offset = xwb_header.segments[1].offset
+                wavebank_offset = xwb_header.segments[1].offset  # METADATASEGMENT
 
-            if xwb_data.flags & WaveBankFlags.compact_format == 0:
+            if (xwb_data.flags & WaveBankFlags.compact_format) != 0:
                 read_int_32_from_stream(xwb_file)  # Compact format
 
             play_region_offset = xwb_header.segments[last_segment].offset
@@ -121,6 +126,110 @@ class WaveBank(StrictBaseModel):
                 entry_name = bytearray(b'\0' * (xwb_data.entry_name_element_size + 1))
                 entry_name[xwb_data.entry_name_element_size] = 0
 
-            # TODO: At line 188, continue translation and add classes as necessary (SoundEffect)
+            sounds = tuple(SoundEffect() for _ in range(xwb_data.entry_count))
+            streams = tuple(StreamInfo() for _ in range(xwb_data.entry_count))
+            # Go to the first wave audio data
+            xwb_file.seek(wavebank_offset)
 
-            # TODO: Return filled WaveBank once file is read
+            print(wavebank_offset)
+            print(xwb_header.segments)
+
+            is_compact_format = (xwb_data.flags & WaveBankFlags.compact_format) != 0
+
+            if is_compact_format:
+                for i in range(xwb_data.entry_count):
+                    length = read_int_32_from_stream(xwb_file)
+                    streams[i].format = MiniFormatTag(xwb_data.compact_format)
+                    streams[i].file_offset = (length & ((1 << 21) - 1)) * xwb_data.alignment
+
+                for i in range(xwb_data.entry_count):
+                    next_offset: NonNegativeInt
+                    if i == (xwb_data.entry_count - 1):
+                        next_offset = xwb_header.segments[last_segment].length
+                    else:
+                        next_offset = streams[i + 1].file_offset
+
+                    # The length of the current stream is by definition the space between
+                    # the current and next stream's offset
+                    streams[i].file_length = next_offset - streams[i].file_offset
+
+            else:
+                for i in range(xwb_data.entry_count):
+                    info = streams[i]
+
+                    if xwb_header.version == 1:
+                        info.format = MiniFormatTag(read_int_32_from_stream(xwb_file))
+                        info.file_offset = read_int_32_from_stream(xwb_file)
+                        info.file_length = read_int_32_from_stream(xwb_file)
+                        info.loop_start = read_int_32_from_stream(xwb_file)
+                        info.loop_length = read_int_32_from_stream(xwb_file)
+
+                    else:
+                        flags_and_duration = read_int_32_from_stream(xwb_file)  # Unused for this
+
+                        # Read data if the buffer includes it
+                        if xwb_data.entry_metadata_element_size >= 8:
+                            info.format = read_int_32_from_stream(xwb_file)
+                            # NOTE: The data stored here makes this a negative number when signed,
+                            # so the hex when naively converted won't be what to actually check against
+                        if xwb_data.entry_metadata_element_size >= 12:
+                            info.file_offset = read_int_32_from_stream(xwb_file)
+                        if xwb_data.entry_metadata_element_size >= 16:
+                            info.file_length = read_int_32_from_stream(xwb_file)
+                        if xwb_data.entry_metadata_element_size >= 20:
+                            info.loop_start = read_int_32_from_stream(xwb_file)
+                        if xwb_data.entry_metadata_element_size >= 24:
+                            info.loop_length = read_int_32_from_stream(xwb_file)
+
+                    # If the metadata element size isn't large enough to include all fields,
+                    # overwrite non-zero file lengths with the length of the last known segment (?)
+                    if xwb_data.entry_metadata_element_size < 24:
+                        if info.file_length != 0:
+                            info.file_length = xwb_header.segments[last_segment].length
+
+            is_streaming_bank = bool(xwb_data.flags & WaveBankTypes.streaming)
+
+            # TODO: For now, I'm hijacking this function to dump what *should* be the PCM data from the wavebank.
+            #  Once It's confirmed that I can extract it, change this to return a filled `WaveBank` as expected.
+
+            if not is_streaming_bank:
+                print('Not streaming.')
+            else:
+                print('Streaming.')
+
+            for i in range(len(streams)):
+                info = streams[i]
+
+                xwb_file.seek(info.file_offset + play_region_offset)
+                audio_data = xwb_file.read(info.file_length)
+
+                format_info = decode_format(info.format, xwb_header.version)
+
+                assert format_info.codec == MiniFormatTag.Pcm
+                print(format_info)
+
+                with wave.open('test.wav', 'wb') as wav_file:
+
+                    wav_file.setnchannels(format_info.channels)
+                    wav_file.setframerate(format_info.rate)
+                    wav_file.setsampwidth(format_info.channels)
+                    wav_file.writeframes(audio_data)
+
+
+            # TODO: Return filled WaveBank once file is read, Load sound effects (make class)
+
+
+def decode_format(format_data: int, version: int) -> WaveFormat:
+    if version == 1:
+        codec =    MiniFormatTag(format_data                      & ((1 << 1) - 1))
+        channels =              (format_data >> 1)                & ((1 << 3) - 1)
+        rate =                  (format_data >> (1 + 3 + 1))      & ((1 << 18) - 1)
+        alignment =             (format_data >> (1 + 3 + 1 + 18)) & ((1 << 8) - 1)
+
+    else:
+        codec =    MiniFormatTag(format_data                      & ((1 << 2) - 1))
+        channels =              (format_data >> 2)                & ((1 << 3) - 1)
+        rate =                  (format_data >> (2 + 3))          & ((1 << 18) - 1)
+        alignment =             (format_data >> (2 + 3 + 18))     & ((1 << 8) - 1)
+
+    return WaveFormat(codec=codec, channels=channels, rate=rate, alignment=alignment)
