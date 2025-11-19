@@ -2,7 +2,7 @@ from typing import Annotated
 
 from pydantic import NonNegativeInt, StringConstraints, PositiveInt
 
-from xact_types.utils import StrictBaseModel
+from xact_types.models.utils import StrictBaseModel
 
 # TODO: Add more specific validation for wave bank names when documentation is found
 #  - this pattern uses symbols and variations manually found to be valid via the XACT GUI, and *is not* exhaustive

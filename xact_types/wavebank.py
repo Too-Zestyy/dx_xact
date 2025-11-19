@@ -1,3 +1,4 @@
+import datetime
 import struct
 import wave
 from pathlib import Path
@@ -13,7 +14,8 @@ from xact_types.models.wave_bank_data import WaveBankData, WaveBankFriendlyName
 from xact_types.models.wave_bank_header import WaveBankHeader
 from xact_types.models.wave_format import WaveFormat
 from xact_types.sound_effect import SoundEffect
-from xact_types.utils import StrictBaseModel
+from xact_types.models.utils import StrictBaseModel
+from xact_types.utils.wavebank_audio_format import decode_audio_format, decode_v2plus_bits_per_sample_flag
 
 
 class XwbValidationError(ValueError):
@@ -24,8 +26,11 @@ class XwbHeuristicError(ValueError):
     pass
 
 
-def read_int_32_from_stream(stream: BinaryIO) -> int:
+def read_int32_from_stream(stream: BinaryIO) -> int:
     return struct.unpack('<i', stream.read(4))[0]
+
+def read_uint32_from_stream(stream: BinaryIO) -> int:
+    return struct.unpack('<I', stream.read(4))[0]
 
 
 class WaveBank(StrictBaseModel):
@@ -70,29 +75,32 @@ class WaveBank(StrictBaseModel):
             # alignment = 0
             # build_time = 0
 
-            xwb_header = WaveBankHeader(version=read_int_32_from_stream(xwb_file))
+            xwb_header = WaveBankHeader(version=read_int32_from_stream(xwb_file))
             xwb_data = WaveBankData()
 
-            last_segment = 4
+            last_segment_idx = 4
 
             if xwb_header.version <= 3:
-                last_segment = 3
+                last_segment_idx = 3
             if xwb_header.version >= 42:
-                read_int_32_from_stream(xwb_file)
+                xwb_file.read(4)
+                # print(read_int32_from_stream(xwb_file))
 
-            for i in range(last_segment):
-                xwb_header.segments[i].offset = read_int_32_from_stream(xwb_file)
-                xwb_header.segments[i].length = read_int_32_from_stream(xwb_file)
+            for i in range(last_segment_idx + 1):
+                xwb_header.segments[i].offset = read_uint32_from_stream(xwb_file)
+                xwb_header.segments[i].length = read_uint32_from_stream(xwb_file)
 
             # print(xwb_header)
 
             # Move to the first segment
             xwb_file.seek(xwb_header.segments[0].offset)
 
+            print(xwb_file.peek(2))
+
             # WAVEBANKDATA:
 
-            xwb_data.flags = read_int_32_from_stream(xwb_file)
-            xwb_data.entry_count = read_int_32_from_stream(xwb_file)
+            xwb_data.flags = read_int32_from_stream(xwb_file)
+            xwb_data.entry_count = read_int32_from_stream(xwb_file)
 
             if xwb_header.version == 2 or xwb_header.version == 3:
                 bank_name_length = 16
@@ -105,15 +113,15 @@ class WaveBank(StrictBaseModel):
             if xwb_header.version == 1:
                 xwb_data.entry_metadata_element_size = 20
             else:
-                xwb_data.entry_metadata_element_size = read_int_32_from_stream(xwb_file)
-                xwb_data.entry_name_element_size = read_int_32_from_stream(xwb_file)
-                xwb_data.alignment = read_int_32_from_stream(xwb_file)
+                xwb_data.entry_metadata_element_size = read_int32_from_stream(xwb_file)
+                xwb_data.entry_name_element_size = read_int32_from_stream(xwb_file)
+                xwb_data.alignment = read_int32_from_stream(xwb_file)
                 wavebank_offset = xwb_header.segments[1].offset  # METADATASEGMENT
 
             if (xwb_data.flags & WaveBankFlags.compact_format) != 0:
-                read_int_32_from_stream(xwb_file)  # Compact format
+                read_int32_from_stream(xwb_file)  # Compact format
 
-            play_region_offset = xwb_header.segments[last_segment].offset
+            play_region_offset = xwb_header.segments[last_segment_idx].offset
             if play_region_offset == 0:
                 play_region_offset = wavebank_offset + (xwb_data.entry_count * xwb_data.entry_metadata_element_size)
 
@@ -141,14 +149,14 @@ class WaveBank(StrictBaseModel):
 
             if is_compact_format:
                 for i in range(xwb_data.entry_count):
-                    length = read_int_32_from_stream(xwb_file)
+                    length = read_int32_from_stream(xwb_file)
                     streams[i].format = MiniFormatTag(xwb_data.compact_format)
                     streams[i].file_offset = (length & ((1 << 21) - 1)) * xwb_data.alignment
 
                 for i in range(xwb_data.entry_count):
                     next_offset: NonNegativeInt
                     if i == (xwb_data.entry_count - 1):
-                        next_offset = xwb_header.segments[last_segment].length
+                        next_offset = xwb_header.segments[last_segment_idx].length
                     else:
                         next_offset = streams[i + 1].file_offset
 
@@ -161,34 +169,34 @@ class WaveBank(StrictBaseModel):
                     info = streams[i]
 
                     if xwb_header.version == 1:
-                        info.format = MiniFormatTag(read_int_32_from_stream(xwb_file))
-                        info.file_offset = read_int_32_from_stream(xwb_file)
-                        info.file_length = read_int_32_from_stream(xwb_file)
-                        info.loop_start = read_int_32_from_stream(xwb_file)
-                        info.loop_length = read_int_32_from_stream(xwb_file)
+                        info.format = read_uint32_from_stream(xwb_file)
+                        info.file_offset = read_int32_from_stream(xwb_file)
+                        info.file_length = read_int32_from_stream(xwb_file)
+                        info.loop_start = read_int32_from_stream(xwb_file)
+                        info.loop_length = read_int32_from_stream(xwb_file)
 
                     else:
-                        flags_and_duration = read_int_32_from_stream(xwb_file)  # Unused for this
+                        info.flags_and_duration = read_int32_from_stream(xwb_file)  # Unused for this
 
                         # Read data if the buffer includes it
                         if xwb_data.entry_metadata_element_size >= 8:
-                            info.format = read_int_32_from_stream(xwb_file)
+                            info.format = read_uint32_from_stream(xwb_file)
                             # NOTE: The data stored here makes this a negative number when signed,
                             # so the hex when naively converted won't be what to actually check against
                         if xwb_data.entry_metadata_element_size >= 12:
-                            info.file_offset = read_int_32_from_stream(xwb_file)
+                            info.file_offset = read_int32_from_stream(xwb_file)
                         if xwb_data.entry_metadata_element_size >= 16:
-                            info.file_length = read_int_32_from_stream(xwb_file)
+                            info.file_length = read_int32_from_stream(xwb_file)
                         if xwb_data.entry_metadata_element_size >= 20:
-                            info.loop_start = read_int_32_from_stream(xwb_file)
+                            info.loop_start = read_int32_from_stream(xwb_file)
                         if xwb_data.entry_metadata_element_size >= 24:
-                            info.loop_length = read_int_32_from_stream(xwb_file)
+                            info.loop_length = read_int32_from_stream(xwb_file)
 
                     # If the metadata element size isn't large enough to include all fields,
                     # overwrite non-zero file lengths with the length of the last known segment (?)
                     if xwb_data.entry_metadata_element_size < 24:
                         if info.file_length != 0:
-                            info.file_length = xwb_header.segments[last_segment].length
+                            info.file_length = xwb_header.segments[last_segment_idx].length
 
             # In cases like a game engine, the sounds would only be loaded if necessary
             # (i.e. when the sound is directly requested in the case of streaming banks, and immediately otherwise).
@@ -238,6 +246,60 @@ class WaveBank(StrictBaseModel):
             data=xwb_data,
         )
 
+    def to_v45_pc_xwb_bytes(self, build_date: datetime.datetime | None = None) -> bytes:
+        # This part of the header is consistent across this version of wavebank
+        # - denotes the magic number for the file, a content version of 45 and tool version of 43
+        xwb_buffer = (b'WBND'
+                      b'\x2D\x00\x00\x00'
+                      b'\x2B\x00\x00\x00')
+        # Add segment data to header
+        # print(self.header.segments)
+        for count, segment in enumerate(self.header.segments):
+            segment_data = struct.pack('<ii', segment.offset, segment.length)
+            xwb_buffer += segment_data
+            # print(segment_data)
+
+        xwb_buffer += struct.pack('<ii', self.data.flags, self.data.entry_count)
+
+        assert len(self.data.bank_name) <= 64
+
+        encoded_bank_name = b''
+        for char in self.data.bank_name:
+            encoded_bank_name += struct.pack('<B', ord(char))
+
+        encoded_bank_name += b'\0' * (64 - len(encoded_bank_name))
+        xwb_buffer += encoded_bank_name
+
+        xwb_buffer += struct.pack('<iiii',
+                                  self.data.entry_metadata_element_size, self.data.entry_name_element_size,
+                                  self.data.alignment, self.data.compact_format
+                                  )
+
+        if build_date is None:
+            build_date = datetime.datetime.now()
+
+        # Convert POSIX time to Microsoft FILETIME (https://devblogs.microsoft.com/oldnewthing/20220602-00/?p=106706)
+        xwb_buffer += struct.pack('<Q', (int(build_date.timestamp()) * 10000000) + 116444736000000000)
+
+        # TODO: Move sample count calculation to function
+        for stream in self.streams:
+            if stream.flags_and_duration != 0:
+                flags_and_duration_value = stream.flags_and_duration
+            else:
+                flag_values = 0x0
+                decoded_format = decode_audio_format(stream.format, self.header.version)
+                # sample count is the length of the file,
+                # divided by the bytes per sample and number of channels (as a sample needs channels * bytes)
+                sample_count = (stream.file_length // (
+                        (decode_v2plus_bits_per_sample_flag(decoded_format.bits_per_sample) // 8) * decoded_format.channels))
+                flags_and_duration_value = flag_values | (sample_count << 4)
+            xwb_buffer += struct.pack('<iI', flags_and_duration_value, stream.format)
+
+        # print(struct.pack('<I', self.streams[0].format))
+
+        # xwb_buffer += b'\x00' * (32 - len(xwb_buffer))
+        return xwb_buffer
+
     def extract_raw_pcm_sounds(self, extract_dir: Path) -> list[Path | None]:
         assert len(self.streams) == len(self.sounds)
 
@@ -259,38 +321,3 @@ class WaveBank(StrictBaseModel):
                 extraction_paths.append(None)
 
         return extraction_paths
-
-
-def decode_audio_format(format_data: int, version: int) -> WaveFormat:
-    # Data descriptions from `unxwb`
-
-    # version 1:
-    # 1 00000000 000101011000100010 0 001 0
-    # | |         |                 | |   |
-    # | |         |                 | |   wFormatTag
-    # | |         |                 | nChannels
-    # | |         |                 ???
-    # | |         nSamplesPerSec
-    # | wBlockAlign
-    # wBitsPerSample
-    if version == 1:
-        codec     = MiniFormatTag(format_data                      & ((1 << 1) - 1))
-        channels  =              (format_data >>  1)               & ((1 << 3) - 1)
-        rate      =              (format_data >> (1 + 3 + 1))      & ((1 << 18) - 1)
-        alignment =              (format_data >> (1 + 3 + 1 + 18)) & ((1 << 8) - 1)
-
-    # versions 2, 3, 37, 42, 43, 44 and so on, check WAVEBANKMINIWAVEFORMAT in xact3wb.h
-    # 0 00000000 000111110100000000 010 01
-    # | |        |                  |   |
-    # | |        |                  |   wFormatTag
-    # | |        |                  nChannels
-    # | |        nSamplesPerSec
-    # | wBlockAlign
-    # wBitsPerSample
-    else:
-        codec     = MiniFormatTag(format_data                      & ((1 << 2) - 1))
-        channels  =              (format_data >>  2)               & ((1 << 3) - 1)
-        rate      =              (format_data >> (2 + 3))          & ((1 << 18) - 1)
-        alignment =              (format_data >> (2 + 3 + 18))     & ((1 << 8) - 1)
-
-    return WaveFormat(codec=codec, channels=channels, rate=rate, alignment=alignment)

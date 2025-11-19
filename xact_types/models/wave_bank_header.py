@@ -1,7 +1,7 @@
 from pydantic import NonNegativeInt
 
 from xact_types.models.segments import Segment
-from xact_types.utils import StrictBaseModel
+from xact_types.models.utils import StrictBaseModel
 
 
 class WaveBankHeader(StrictBaseModel):

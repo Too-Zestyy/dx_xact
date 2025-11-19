@@ -1,8 +1,8 @@
 from pydantic import PositiveInt, NonNegativeInt
 
 from xact_types.enums.mini_format_tag import MiniFormatTag
+from xact_types.models.utils import StrictBaseModel
 from xact_types.models.wave_bank_data import WaveBankFriendlyName
-from xact_types.utils import StrictBaseModel
 
 
 class SoundEffect(StrictBaseModel):
