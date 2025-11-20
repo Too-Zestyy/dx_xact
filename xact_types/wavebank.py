@@ -33,8 +33,9 @@ def read_uint32_from_stream(stream: BinaryIO) -> int:
     return struct.unpack('<I', stream.read(4))[0]
 
 
+# TODO: Move from parsing as int32 to uint32 where applicable, and deal with all the inevitable issues it will cause
+
 class WaveBank(StrictBaseModel):
-    # TODO: Add parsing of sound data (likely just waves for now)
     sounds: list[SoundEffect] | tuple[SoundEffect, ...]
     streams: tuple[StreamInfo, ...]
 
@@ -94,8 +95,6 @@ class WaveBank(StrictBaseModel):
 
             # Move to the first segment
             xwb_file.seek(xwb_header.segments[0].offset)
-
-            print(xwb_file.peek(2))
 
             # WAVEBANKDATA:
 
@@ -246,18 +245,28 @@ class WaveBank(StrictBaseModel):
             data=xwb_data,
         )
 
-    def to_v45_pc_xwb_bytes(self, build_date: datetime.datetime | None = None) -> bytes:
+    def encode_as_v45_pc_xwb(self, build_date: datetime.datetime | None = None) -> bytes:
+        if self.header.segments[2].length != 0 or self.header.segments[3].length != 0:
+            raise NotImplementedError('This encoder does not currently support `SeekTables` or `EntryNames` segments.')
+
         # This part of the header is consistent across this version of wavebank
         # - denotes the magic number for the file, a content version of 45 and tool version of 43
         xwb_buffer = (b'WBND'
                       b'\x2D\x00\x00\x00'
                       b'\x2B\x00\x00\x00')
         # Add segment data to header
-        # print(self.header.segments)
         for count, segment in enumerate(self.header.segments):
             segment_data = struct.pack('<ii', segment.offset, segment.length)
             xwb_buffer += segment_data
             # print(segment_data)
+
+        if not (self.header.segments[4].offset // 2048).is_integer():
+            raise XwbValidationError('Audio data segment should be aligned to the nearest 2048 bytes.')
+        if self.header.segments[4].offset == 0:
+            # TODO: Add functionality to calculate nearest 2048 multiple offset, possibly via class property
+            #  (theoretically, a wavebank could contain enough sounds to exceed 2048 bytes)
+            raise XwbValidationError('Audio data segment offset should not be empty. '
+                                     'TODO: Calculate automatically.')
 
         xwb_buffer += struct.pack('<ii', self.data.flags, self.data.entry_count)
 
@@ -275,14 +284,21 @@ class WaveBank(StrictBaseModel):
                                   self.data.alignment, self.data.compact_format
                                   )
 
+        # If no build time is specified, set it to the current date and time
         if build_date is None:
             build_date = datetime.datetime.now()
-
         # Convert POSIX time to Microsoft FILETIME (https://devblogs.microsoft.com/oldnewthing/20220602-00/?p=106706)
         xwb_buffer += struct.pack('<Q', (int(build_date.timestamp()) * 10000000) + 116444736000000000)
 
         # TODO: Move sample count calculation to function
-        for stream in self.streams:
+
+        # Stores the current offset of the audio, relative to the beginning of the `EntryWaveData` segment.
+        # Essentially a counter containing the length of all audio data before each subsequent sound.
+        cur_relative_audio_offset = 0
+
+        assert len(self.streams) == len(self.sounds)
+
+        for sound, stream in zip(self.sounds, self.streams):
             if stream.flags_and_duration != 0:
                 flags_and_duration_value = stream.flags_and_duration
             else:
@@ -293,7 +309,26 @@ class WaveBank(StrictBaseModel):
                 sample_count = (stream.file_length // (
                         (decode_v2plus_bits_per_sample_flag(decoded_format.bits_per_sample) // 8) * decoded_format.channels))
                 flags_and_duration_value = flag_values | (sample_count << 4)
-            xwb_buffer += struct.pack('<iI', flags_and_duration_value, stream.format)
+
+            audio_length = len(sound.audio_data)
+            xwb_buffer += struct.pack('<iIIIII',
+                                      flags_and_duration_value, stream.format,
+                                      cur_relative_audio_offset, audio_length,
+                                      stream.loop_start, stream.loop_length)
+
+            cur_relative_audio_offset += audio_length
+
+        if len(xwb_buffer) > self.header.segments[4].offset:
+            raise XwbValidationError(f'The header data exceeds the offset of audio data to insert into the file. '
+                                     f'(Offset is at {self.header.segments[4].offset}, '
+                                     f'header is {len(xwb_buffer)} bytes long)')
+
+        # TODO: Implement seek tables and entry names
+
+        xwb_buffer += b'\0' * (self.header.segments[4].offset - len(xwb_buffer))
+
+        for sound in self.sounds:
+            xwb_buffer += sound.audio_data
 
         # print(struct.pack('<I', self.streams[0].format))
 
