@@ -1,8 +1,5 @@
-import struct
-from enum import IntFlag
-
 from xact_types.enums.mini_format_tag import MiniFormatTag
-from xact_types.models.wave_format import WaveFormat
+from xact_types.models.wavebank.wave_format import WaveFormat
 
 
 def decode_audio_format(format_data: int, version: int) -> WaveFormat:

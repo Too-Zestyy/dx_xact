@@ -4,15 +4,13 @@ import wave
 from pathlib import Path
 from typing import BinaryIO
 
-from pydantic import NonNegativeInt, PositiveInt
+from pydantic import NonNegativeInt
 
 from xact_types.enums.mini_format_tag import MiniFormatTag
 from xact_types.enums.wavebank_flags import WaveBankFlags, WaveBankTypes
-from xact_types.models.segments import Segment
-from xact_types.models.stream_info import StreamInfo
-from xact_types.models.wave_bank_data import WaveBankData, WaveBankFriendlyName
-from xact_types.models.wave_bank_header import WaveBankHeader
-from xact_types.models.wave_format import WaveFormat
+from xact_types.models.wavebank.stream_info import StreamInfo
+from xact_types.models.wavebank.wave_bank_data import WaveBankData
+from xact_types.models.wavebank.wave_bank_header import WaveBankHeader
 from xact_types.sound_effect import SoundEffect
 from xact_types.models.utils import StrictBaseModel
 from xact_types.utils.wavebank_audio_format import decode_audio_format, decode_v2plus_bits_per_sample_flag

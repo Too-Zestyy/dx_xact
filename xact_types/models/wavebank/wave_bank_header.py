@@ -1,6 +1,6 @@
 from pydantic import NonNegativeInt
 
-from xact_types.models.segments import Segment
+from xact_types.models.wavebank.segments import Segment
 from xact_types.models.utils import StrictBaseModel
 
 
