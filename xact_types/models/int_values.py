@@ -32,15 +32,16 @@ def get_signed_limit_values_for_bytes(bytes: int):
     return get_signed_limit_values_for_bits(bytes * 8)
 
 
-def get_signed_annotation(bits: int) -> type[Annotated[int, ...]]:
+def get_signed_int_annotation(bits: int) -> type[Annotated[int, ...]]:
     limits = get_signed_limit_values_for_bits(bits)
     return Annotated[int, Field(ge=limits[0], le=limits[1])]
 
 
-def get_unsigned_annotation(bits: int) -> type[Annotated[int, ...]]:
+def get_unsigned_int_annotation(bits: int) -> type[Annotated[int, ...]]:
     return Annotated[int, Field(ge=0, le=get_unsigned_limit_values_for_bits(bits)[1])]
 
 
-Int32Value = get_signed_annotation(32)
-UInt32Value = get_unsigned_annotation(32)
+Int32Value = get_signed_int_annotation(32)
+UInt32Value = get_unsigned_int_annotation(32)
+UInt16Value = get_unsigned_int_annotation(16)
 
